@@ -93,10 +93,6 @@ def default_lang_dir():
 
 
 def default_exe_dir():
-    # Keep external executables next to the app:
-    #   MakeTS/exe_files/ffmpeg.exe
-    #   MakeTS/exe_files/ffprobe.exe
-    #   MakeTS/exe_files/tsp.exe
     return app_base_dir() / "exe_files"
 
 
@@ -104,12 +100,39 @@ def exe_name(name):
     return f"{name}.exe" if os.name == "nt" else name
 
 
+def _tsduck_install_dirs():
+    dirs = []
+    for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        val = os.environ.get(env)
+        if val:
+            dirs.append(Path(val) / "TSDuck" / "bin")
+    return dirs
+
+
+def find_exe(name):
+    """Search order: PATH → known install dirs → exe_files/. Returns path str or None."""
+    found = shutil.which(name)
+    if found:
+        return found
+    if name == "tsp" and os.name == "nt":
+        for d in _tsduck_install_dirs():
+            candidate = d / exe_name(name)
+            if candidate.exists():
+                return str(candidate)
+    candidate = default_exe_dir() / exe_name(name)
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
 def default_ffmpeg_path():
-    return default_exe_dir() / exe_name("ffmpeg")
+    found = find_exe("ffmpeg")
+    return Path(found) if found else default_exe_dir() / exe_name("ffmpeg")
 
 
 def default_tsp_path():
-    return default_exe_dir() / exe_name("tsp")
+    found = find_exe("tsp")
+    return Path(found) if found else default_exe_dir() / exe_name("tsp")
 
 
 UI_TEXT_KEYS = [
