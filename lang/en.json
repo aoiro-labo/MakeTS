@@ -134,6 +134,17 @@
     "MPEG2-TS files": "MPEG2-TS files",
     "Audio files": "Audio files",
     "Video files": "Video files",
-    "WAV files": "WAV files"
+    "WAV files": "WAV files",
+    "Main": "Main",
+    "Station": "Station",
+    "Settings": "Settings",
+    "Close": "Close",
+    "Copy environment info": "Copy environment info",
+    "Copied to clipboard.": "Copied to clipboard.",
+    "Check for updates": "Check for updates",
+    "Up to date.": "Up to date.",
+    "New version available:": "New version available:",
+    "Current:": "Current:",
+    "Could not determine latest version.": "Could not determine latest version."
   }
 }

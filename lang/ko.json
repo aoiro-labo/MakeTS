@@ -134,6 +134,10 @@
     "MPEG2-TS files": "MPEG2-TS 파일",
     "Audio files": "음성 파일",
     "Video files": "영상 파일",
-    "WAV files": "WAV 파일"
+    "WAV files": "WAV 파일",
+    "Main": "메인",
+    "Station": "방송국",
+    "Settings": "설정",
+    "Close": "닫기"
   }
 }

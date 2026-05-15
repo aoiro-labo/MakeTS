@@ -134,6 +134,10 @@
     "MPEG2-TS files": "MPEG2-TS文件",
     "Audio files": "音频文件",
     "Video files": "视频文件",
-    "WAV files": "WAV文件"
+    "WAV files": "WAV文件",
+    "Main": "主频道",
+    "Station": "广播站",
+    "Settings": "设置",
+    "Close": "关闭"
   }
 }

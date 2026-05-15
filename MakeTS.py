@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -7,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
@@ -16,6 +19,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+
+APP_VERSION = "0.1.0"
+GITHUB_REPO = ""  # e.g. "owner/MakeTS" — set to enable update check
 
 LANGUAGE_OPTIONS = [
     "Japanese (jpn)",
@@ -146,6 +152,17 @@ UI_TEXT_KEYS = [
     "TS Info",
     "Program",
     "Log",
+    "Main",
+    "Station",
+    "Settings",
+    "Close",
+    "Copy environment info",
+    "Copied to clipboard.",
+    "Check for updates",
+    "Up to date.",
+    "New version available:",
+    "Current:",
+    "Could not determine latest version.",
     "Encode",
     "Stop",
     "Ready",
@@ -281,6 +298,17 @@ BUILTIN_JA_TRANSLATIONS = {
     "TS Info": "TS情報",
     "Program": "番組情報",
     "Log": "ログ",
+    "Main": "メイン",
+    "Station": "放送局",
+    "Settings": "設定",
+    "Close": "閉じる",
+    "Copy environment info": "環境情報をコピー",
+    "Copied to clipboard.": "クリップボードにコピーしました。",
+    "Check for updates": "アップデートを確認",
+    "Up to date.": "最新バージョンです。",
+    "New version available:": "新しいバージョンがあります:",
+    "Current:": "現在:",
+    "Could not determine latest version.": "最新バージョンを取得できませんでした。",
     "Encode": "出力",
     "Stop": "停止",
     "Ready": "待機中",
@@ -795,6 +823,7 @@ class MakeTSGui(tk.Tk):
         old_root = getattr(self, "root_frame", None)
         if old_root is not None:
             old_root.destroy()
+            self.update_idletasks()
 
         root = ttk.Frame(self, padding=8)
         root.pack(fill="both", expand=True)
@@ -823,66 +852,81 @@ class MakeTSGui(tk.Tk):
 
     def configure_style(self):
         try:
-            ttk.Style().theme_use("classic")
-        except tk.TclError:
-            pass
+            import sv_ttk
+            sv_ttk.set_theme("light")
+        except ImportError:
+            try:
+                ttk.Style().theme_use("clam")
+            except tk.TclError:
+                pass
 
-        style = ttk.Style()
-        style.configure(
-            "TCombobox",
-            fieldbackground="white",
-            background="white",
-            foreground="black",
-            selectbackground="white",
-            selectforeground="black",
-            arrowcolor="black",
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
-            background=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
-            foreground=[("disabled", "#777777"), ("readonly", "black"), ("!disabled", "black")],
-            selectbackground=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
-            selectforeground=[("disabled", "#777777"), ("readonly", "black"), ("!disabled", "black")],
-            arrowcolor=[("disabled", "#777777"), ("!disabled", "black")],
-        )
-
-        try:
-            style.layout(
-                "TNotebook.Tab",
-                [
-                    (
-                        "Notebook.tab",
-                        {
-                            "sticky": "nswe",
-                            "children": [
-                                (
-                                    "Notebook.padding",
-                                    {
-                                        "side": "top",
-                                        "sticky": "nswe",
-                                        "children": [("Notebook.label", {"side": "top", "sticky": ""})],
-                                    },
-                                )
-                            ],
-                        },
-                    )
-                ],
+            style = ttk.Style()
+            style.configure(
+                "TCombobox",
+                fieldbackground="white",
+                background="white",
+                foreground="black",
+                selectbackground="white",
+                selectforeground="black",
+                arrowcolor="black",
             )
-        except tk.TclError:
-            pass
+            style.map(
+                "TCombobox",
+                fieldbackground=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
+                background=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
+                foreground=[("disabled", "#777777"), ("readonly", "black"), ("!disabled", "black")],
+                selectbackground=[("disabled", "#e0e0e0"), ("readonly", "white"), ("!disabled", "white")],
+                selectforeground=[("disabled", "#777777"), ("readonly", "black"), ("!disabled", "black")],
+                arrowcolor=[("disabled", "#777777"), ("!disabled", "black")],
+            )
+            try:
+                style.layout(
+                    "TNotebook.Tab",
+                    [
+                        (
+                            "Notebook.tab",
+                            {
+                                "sticky": "nswe",
+                                "children": [
+                                    (
+                                        "Notebook.padding",
+                                        {
+                                            "side": "top",
+                                            "sticky": "nswe",
+                                            "children": [("Notebook.label", {"side": "top", "sticky": ""})],
+                                        },
+                                    )
+                                ],
+                            },
+                        )
+                    ],
+                )
+            except tk.TclError:
+                pass
 
         self.option_add("*Listbox.background", "white")
         self.option_add("*Listbox.foreground", "black")
         self.option_add("*TCombobox*Listbox.background", "white")
         self.option_add("*TCombobox*Listbox.foreground", "black")
 
+        # Sync root window background to theme so resize doesn't expose a black border
+        bg = ttk.Style().lookup("TFrame", "background") or self.cget("background")
+        if bg:
+            self.configure(background=bg)
+
     def build_io_section(self, parent):
-        frame = ttk.LabelFrame(parent, text=self.t("Input / Output"))
-        frame.pack(fill="x", pady=(0, 8))
-        self.language_select_row(frame)
-        self.path_row(frame, "ffmpeg", self.ffmpeg_path, self.select_ffmpeg)
-        self.path_row(frame, "Save as", self.output_path, self.select_output_file)
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(0, 4))
+        ttk.Label(row, text=self.t("UI Language")).pack(side="left", padx=(0, 8))
+        combo = ttk.Combobox(
+            row,
+            textvariable=self.ui_language,
+            values=list(self.language_names.keys()),
+            state="readonly",
+            width=20,
+        )
+        combo.pack(side="left")
+        self.bind_input_context_menu(combo)
 
     def build_file_section(self, parent):
         frame = ttk.LabelFrame(parent, text=self.t("Files"))
@@ -895,25 +939,28 @@ class MakeTSGui(tk.Tk):
 
         self.file_list = tk.Listbox(
             frame,
-            height=5,
+            height=4,
             bg="white",
             fg="black",
             selectbackground="#0078D7",
             selectforeground="white",
         )
-        self.file_list.pack(fill="x", padx=8, pady=(0, 8))
+        self.file_list.pack(fill="x", padx=8, pady=(0, 4))
         for path in self.input_files:
             self.file_list.insert("end", path)
+
+        self.path_row(frame, "Output", self.output_path, self.select_output_file)
+        ttk.Frame(frame).pack(pady=(4, 0))
 
     def build_tabs(self, parent):
         self.tabs = ttk.Notebook(parent)
         self.tabs.pack(fill="both", expand=True, pady=(0, 8))
 
         tabs = {
-            "Video": "video_tab",
-            "Audio": "audio_tab",
-            "TS Info": "ts_info_tab",
-            "Program": "program_tab",
+            "Main": "main_tab",
+            "OneSeg 1": "oneseg1_tab",
+            "OneSeg 2": "oneseg2_tab",
+            "Station": "station_tab",
             "Log": "log_tab",
         }
         for label, attr in tabs.items():
@@ -921,10 +968,16 @@ class MakeTSGui(tk.Tk):
             setattr(self, attr, frame)
             self.tabs.add(frame, text=self.t(label))
 
-        self.build_video_tab()
-        self.build_audio_tab()
-        self.build_ts_info_tab()
-        self.build_program_tab()
+        self.secondary_audio_controls = []
+        self.oneseg_video_controls = []
+        self.oneseg_audio_controls = []
+        self.oneseg_eit_controls = []
+        self.oneseg_description_texts = {}
+
+        self.build_main_tab()
+        self.build_oneseg_tab(1)
+        self.build_oneseg_tab(2)
+        self.build_station_tab()
         self.build_log_tab()
 
     def build_bottom_bar(self, parent):
@@ -936,6 +989,8 @@ class MakeTSGui(tk.Tk):
 
         self.stop_button = ttk.Button(bottom, text=self.t("Stop"), width=14, command=self.stop_encode, state="disabled")
         self.stop_button.pack(side="left", padx=(6, 0))
+
+        ttk.Button(bottom, text=self.t("Settings"), width=10, command=self.open_settings).pack(side="right")
 
         self.status = tk.StringVar(value=self.t("Ready"))
         ttk.Label(bottom, textvariable=self.status, relief="sunken", anchor="w").pack(
@@ -1107,7 +1162,7 @@ class MakeTSGui(tk.Tk):
         return combo
 
     def combo_row(self, parent, row, label, variable, values):
-        ttk.Label(parent, text=self.t(label), width=18).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=self.t(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
 
         combo = ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=24)
         combo.grid(row=row, column=1, sticky="w", pady=4)
@@ -1115,7 +1170,7 @@ class MakeTSGui(tk.Tk):
         return combo
 
     def entry_row(self, parent, row, label, variable, width=36):
-        ttk.Label(parent, text=self.t(label), width=18).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=self.t(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
 
         entry = ttk.Entry(parent, textvariable=variable, width=width)
         entry.grid(row=row, column=1, sticky="w", pady=4)
@@ -1123,7 +1178,7 @@ class MakeTSGui(tk.Tk):
         return entry
 
     def file_entry_row(self, parent, row, label, variable, command, width=52):
-        ttk.Label(parent, text=self.t(label), width=18).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=self.t(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
 
         entry = ttk.Entry(parent, textvariable=variable, width=width)
         entry.grid(row=row, column=1, sticky="we", pady=4)
@@ -1140,7 +1195,7 @@ class MakeTSGui(tk.Tk):
         return frame
 
     def text_row(self, parent, row, label, initial_text="", height=4):
-        ttk.Label(parent, text=self.t(label), width=18).grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=self.t(label)).grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=4)
 
         text = tk.Text(parent, width=58, height=height, wrap="word", bg="white", fg="black", insertbackground="black")
         text.grid(row=row, column=1, sticky="we", pady=4)
@@ -1148,48 +1203,125 @@ class MakeTSGui(tk.Tk):
         self.bind_input_context_menu(text)
         return text
 
-    def build_video_tab(self):
-        main = self.make_scroll_frame(self.video_tab)
+    def build_main_tab(self):
+        main = self.make_scroll_frame(self.main_tab)
+        bg = self.system_background()
 
-        frame = ttk.LabelFrame(main, text=self.t("Video"))
-        frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
-        grid = ttk.Frame(frame)
-        grid.pack(fill="x", padx=8, pady=8)
+        v_frame = ttk.LabelFrame(main, text=self.t("Video"))
+        v_frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
+        v_grid = ttk.Frame(v_frame)
+        v_grid.pack(fill="x", padx=8, pady=8)
+        self.combo_row(v_grid, 0, "Size", self.video_size, ["1920x1080", "1440x1080", "1280x720", VIDEO_SIZE_SD, VIDEO_SIZE_SD_SIDECUT])
+        self.combo_row(v_grid, 1, "Scan", self.scan_mode, ["60i", "60p"])
+        self.combo_row(v_grid, 2, "Aspect", self.output_aspect, ["16:9", "4:3"])
+        self.entry_row(v_grid, 3, "Bitrate", self.video_bitrate)
+        self.entry_row(v_grid, 4, "Maxrate", self.video_maxrate)
+        self.entry_row(v_grid, 5, "Bufsize", self.video_bufsize)
+        self.entry_row(v_grid, 6, "GOP", self.gop)
+        v_grid.columnconfigure(1, weight=1)
 
-        self.combo_row(grid, 0, "Size", self.video_size, ["1920x1080", "1440x1080", "1280x720", VIDEO_SIZE_SD, VIDEO_SIZE_SD_SIDECUT])
-        self.combo_row(grid, 1, "Scan", self.scan_mode, ["60i", "60p"])
-        self.combo_row(grid, 2, "Aspect", self.output_aspect, ["16:9", "4:3"])
-        self.entry_row(grid, 3, "Bitrate", self.video_bitrate)
-        self.entry_row(grid, 4, "Maxrate", self.video_maxrate)
-        self.entry_row(grid, 5, "Bufsize", self.video_bufsize)
-        self.entry_row(grid, 6, "GOP", self.gop)
+        primary = ttk.LabelFrame(main, text=self.t("Primary Audio"))
+        primary.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
+        p_grid = ttk.Frame(primary)
+        p_grid.pack(fill="x", padx=8, pady=8)
+        tk.Checkbutton(
+            p_grid,
+            text=self.t("Use input audio"),
+            variable=self.primary_use_input_audio,
+            onvalue="on",
+            offvalue="off",
+            bg=bg,
+            activebackground=bg,
+            highlightthickness=0,
+            bd=0,
+        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
+        ttk.Label(p_grid, text=self.t("Audio file")).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.primary_audio_entry = ttk.Entry(p_grid, textvariable=self.primary_audio_path, width=52)
+        self.primary_audio_entry.grid(row=1, column=1, sticky="we", pady=4)
+        self.bind_input_context_menu(self.primary_audio_entry)
+        self.primary_audio_browse = ttk.Button(p_grid, text=self.t("Browse"), width=10, command=self.select_primary_audio)
+        self.primary_audio_browse.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
+        self.combo_row(p_grid, 2, "Mode", self.audio_mode, ["Stereo", "Mono", "Surround"])
+        self.combo_row(p_grid, 3, "Bitrate", self.audio_bitrate, AUDIO_BITRATES)
+        self.combo_row(p_grid, 4, "Sample rate", self.audio_samplerate, ["48000", "44100"])
+        self.combo_row(p_grid, 5, "Language", self.primary_audio_language, LANGUAGE_OPTIONS)
+        self.entry_row(p_grid, 6, "Track name", self.primary_audio_title)
+        p_grid.columnconfigure(1, weight=1)
 
-        self.build_oneseg_streams_section(main)
+        secondary = ttk.LabelFrame(main, text=self.t("Secondary Audio"))
+        secondary.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
+        s_grid = ttk.Frame(secondary)
+        s_grid.pack(fill="x", padx=8, pady=8)
+        ttk.Label(s_grid, text=self.t("Audio file")).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        sec_entry = ttk.Entry(s_grid, textvariable=self.secondary_audio_path, width=52)
+        sec_entry.grid(row=0, column=1, sticky="we", pady=4)
+        self.bind_input_context_menu(sec_entry)
+        sec_browse = ttk.Button(s_grid, text=self.t("Browse"), width=10, command=self.select_secondary_audio)
+        sec_browse.grid(row=0, column=2, sticky="w", padx=(6, 0), pady=4)
+        self.secondary_audio_controls.extend([
+            (sec_entry, "normal"),
+            (sec_browse, "normal"),
+            (self.combo_row(s_grid, 1, "Mode", self.secondary_audio_mode, ["Stereo", "Mono"]), "readonly"),
+            (self.combo_row(s_grid, 2, "Bitrate", self.secondary_audio_bitrate, AUDIO_BITRATES), "readonly"),
+            (self.combo_row(s_grid, 3, "Sample rate", self.secondary_audio_samplerate, ["48000", "44100"]), "readonly"),
+            (self.combo_row(s_grid, 4, "Language", self.secondary_audio_language, LANGUAGE_OPTIONS), "readonly"),
+            (self.entry_row(s_grid, 5, "Track name", self.secondary_audio_title), "normal"),
+        ])
+        s_grid.columnconfigure(1, weight=1)
 
-    def build_oneseg_streams_section(self, parent):
-        frame = ttk.LabelFrame(parent, text=self.t("OneSeg Streams"))
-        frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
-        self.oneseg_video_controls = []
-        bg = self.cget("background")
+        eit_frame = ttk.LabelFrame(main, text=self.t("EIT Present Event"))
+        eit_frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
+        e_grid = ttk.Frame(eit_frame)
+        e_grid.pack(fill="x", padx=8, pady=8)
+        tk.Checkbutton(
+            e_grid,
+            text=self.t("Inject EIT"),
+            variable=self.eit_enabled,
+            onvalue="on",
+            offvalue="off",
+            bg=bg,
+            activebackground=bg,
+            highlightthickness=0,
+            bd=0,
+        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
+        self.entry_row(e_grid, 1, "Event ID", self.event_id)
+        self.entry_row(e_grid, 2, "Event Name", self.event_name)
+        self.description_text = self.text_row(e_grid, 3, "Description", self.event_text.get(), height=4)
+        self.entry_row(e_grid, 4, "Start Time", self.event_start_time)
+        self.entry_row(e_grid, 5, "Duration", self.event_duration)
+        self.combo_row(e_grid, 6, "Language", self.event_language, LANGUAGE_OPTIONS)
+        self.combo_row(e_grid, 7, "Running Status", self.event_running_status, ["running", "not-running", "pausing", "undefined"])
+        self.combo_row(e_grid, 8, "Genre", self.genre, GENRE_OPTIONS)
+        e_grid.columnconfigure(1, weight=1)
 
-        for index in (1, 2):
-            vars_ = self.oneseg_vars[index]
-            self.build_oneseg_stream_frame(
-                frame,
-                self.t(f"OneSeg {index}"),
-                index,
-                vars_["video_mode"],
-                vars_["video_path"],
-                vars_["resolution"],
-                vars_["video_bitrate"],
-                lambda i=index: self.select_oneseg_video(i),
-                bg,
-            )
-        self.update_oneseg_video_state()
+        self.on_primary_audio_source_changed()
+        self.update_secondary_audio_state()
+
+    def build_oneseg_tab(self, index):
+        main = self.make_scroll_frame(getattr(self, f"oneseg{index}_tab"))
+        bg = self.system_background()
+        v = self.oneseg_vars[index]
+        self.build_oneseg_stream_frame(
+            main, self.t("Video"), index,
+            v["video_mode"], v["video_path"], v["resolution"], v["video_bitrate"],
+            lambda i=index: self.select_oneseg_video(i), bg,
+        )
+        self.build_oneseg_audio_frame(
+            main, self.t("Audio"), index,
+            v["audio_mode"], v["audio_path"], v["audio_bitrate"],
+            lambda i=index: self.select_oneseg_audio(i),
+            v["secondary_audio_path"], v["secondary_audio_bitrate"],
+            lambda i=index: self.select_oneseg_secondary_audio(i), bg,
+        )
+        self.build_oneseg_eit_frame(
+            main, self.t("EIT Present Event"), index,
+            v["eit_mode"], v["event_id"], v["event_name"], v["event_text"],
+            v["start_time"], v["duration"], v["language"], v["running_status"], v["genre"], bg,
+        )
 
     def build_oneseg_stream_frame(self, parent, title, index, video_mode_var, video_var, resolution_var, video_bitrate_var, video_command, bg):
         group = ttk.LabelFrame(parent, text=title)
-        group.pack(fill="x", anchor="n", padx=8, pady=(8, 4))
+        group.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
 
         grid = ttk.Frame(group)
         grid.pack(fill="x", padx=8, pady=8)
@@ -1226,95 +1358,6 @@ class MakeTSGui(tk.Tk):
             [(resolution_combo, "readonly"), (video_bitrate_entry, "normal")],
         ))
 
-    def build_audio_tab(self):
-        main = self.make_scroll_frame(self.audio_tab)
-        bg = self.cget("background")
-        self.secondary_audio_controls = []
-
-        primary = ttk.LabelFrame(main, text=self.t("Primary Audio"))
-        primary.pack(fill="x", anchor="n", pady=(0, 8))
-        grid = ttk.Frame(primary)
-        grid.pack(fill="x", padx=8, pady=8)
-
-        tk.Checkbutton(
-            grid,
-            text=self.t("Use input audio"),
-            variable=self.primary_use_input_audio,
-            onvalue="on",
-            offvalue="off",
-            bg=bg,
-            activebackground=bg,
-            highlightthickness=0,
-            bd=0,
-        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
-
-        ttk.Label(grid, text=self.t("Audio file"), width=18).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
-        self.primary_audio_entry = ttk.Entry(grid, textvariable=self.primary_audio_path, width=52)
-        self.primary_audio_entry.grid(row=1, column=1, sticky="we", pady=4)
-        self.bind_input_context_menu(self.primary_audio_entry)
-        self.primary_audio_browse = ttk.Button(grid, text=self.t("Browse"), width=10, command=self.select_primary_audio)
-        self.primary_audio_browse.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
-
-        self.combo_row(grid, 2, "Mode", self.audio_mode, ["Stereo", "Mono", "Surround"])
-        self.combo_row(grid, 3, "Bitrate", self.audio_bitrate, AUDIO_BITRATES)
-        self.combo_row(grid, 4, "Sample rate", self.audio_samplerate, ["48000", "44100"])
-        self.combo_row(grid, 5, "Language", self.primary_audio_language, LANGUAGE_OPTIONS)
-        self.entry_row(grid, 6, "Track name", self.primary_audio_title)
-        grid.columnconfigure(1, weight=1)
-
-        secondary = ttk.LabelFrame(main, text=self.t("Secondary Audio"))
-        secondary.pack(fill="x", anchor="n")
-        sec_grid = ttk.Frame(secondary)
-        sec_grid.pack(fill="x", padx=8, pady=8)
-
-        ttk.Label(sec_grid, text=self.t("Audio file"), width=18).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
-        secondary_entry = ttk.Entry(sec_grid, textvariable=self.secondary_audio_path, width=52)
-        secondary_entry.grid(row=0, column=1, sticky="we", pady=4)
-        self.bind_input_context_menu(secondary_entry)
-
-        browse = ttk.Button(sec_grid, text=self.t("Browse"), width=10, command=self.select_secondary_audio)
-        browse.grid(row=0, column=2, sticky="w", padx=(6, 0), pady=4)
-
-        controls = [
-            (secondary_entry, "normal"),
-            (browse, "normal"),
-            (self.combo_row(sec_grid, 1, "Mode", self.secondary_audio_mode, ["Stereo", "Mono"]), "readonly"),
-            (self.combo_row(sec_grid, 2, "Bitrate", self.secondary_audio_bitrate, AUDIO_BITRATES), "readonly"),
-            (self.combo_row(sec_grid, 3, "Sample rate", self.secondary_audio_samplerate, ["48000", "44100"]), "readonly"),
-            (self.combo_row(sec_grid, 4, "Language", self.secondary_audio_language, LANGUAGE_OPTIONS), "readonly"),
-            (self.entry_row(sec_grid, 5, "Track name", self.secondary_audio_title), "normal"),
-        ]
-        self.secondary_audio_controls.extend(controls)
-        sec_grid.columnconfigure(1, weight=1)
-
-        self.build_oneseg_audio_section(main)
-
-        self.on_primary_audio_source_changed()
-        self.update_secondary_audio_state()
-
-    def build_oneseg_audio_section(self, parent):
-        frame = ttk.LabelFrame(parent, text=self.t("OneSeg") + " " + self.t("Audio"))
-        frame.pack(fill="x", anchor="n", pady=(8, 0))
-        self.oneseg_audio_controls = []
-        bg = self.cget("background")
-
-        for index in (1, 2):
-            vars_ = self.oneseg_vars[index]
-            self.build_oneseg_audio_frame(
-                frame,
-                self.t(f"OneSeg {index}"),
-                index,
-                vars_["audio_mode"],
-                vars_["audio_path"],
-                vars_["audio_bitrate"],
-                lambda i=index: self.select_oneseg_audio(i),
-                vars_["secondary_audio_path"],
-                vars_["secondary_audio_bitrate"],
-                lambda i=index: self.select_oneseg_secondary_audio(i),
-                bg,
-            )
-        self.update_oneseg_audio_state()
-
     def build_oneseg_audio_frame(
         self,
         parent,
@@ -1330,7 +1373,7 @@ class MakeTSGui(tk.Tk):
         bg,
     ):
         group = ttk.LabelFrame(parent, text=title)
-        group.pack(fill="x", anchor="n", padx=8, pady=(8, 4))
+        group.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
 
         grid = ttk.Frame(group)
         grid.pack(fill="x", padx=8, pady=8)
@@ -1397,9 +1440,9 @@ class MakeTSGui(tk.Tk):
             ],
         ))
 
-    def build_ts_info_tab(self):
-        main = self.make_scroll_frame(self.ts_info_tab)
-        bg = self.cget("background")
+    def build_station_tab(self):
+        main = self.make_scroll_frame(self.station_tab)
+        bg = self.system_background()
 
         ts_frame = ttk.LabelFrame(main, text=self.t("NIT / Station Profile"))
         ts_frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
@@ -1418,13 +1461,7 @@ class MakeTSGui(tk.Tk):
             bd=0,
         ).grid(row=0, column=1, sticky="w", pady=(0, 8))
 
-        ttk.Label(grid, text=self.t("tsp.exe"), width=18).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
-        tsduck_entry = ttk.Entry(grid, textvariable=self.tsduck_path, width=52)
-        tsduck_entry.grid(row=1, column=1, sticky="we", pady=4)
-        self.bind_input_context_menu(tsduck_entry)
-        ttk.Button(grid, text=self.t("Browse"), width=10, command=self.select_tsduck).grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
-
-        self.xml_button_row(grid, 2, "Import", self.import_nit_xml_file, "Export", self.export_nit_xml_file)
+        self.xml_button_row(grid, 1, "Import", self.import_nit_xml_file, "Export", self.export_nit_xml_file)
 
         ts_rows = [
             ("Network Name", self.network_name),
@@ -1442,13 +1479,31 @@ class MakeTSGui(tk.Tk):
             ("Remote Key ID", self.remote_control_key_id),
             ("Service Type", self.service_type),
         ]
-        for index, (label, variable) in enumerate(ts_rows, start=3):
-            self.entry_row(grid, index, label, variable)
+        for i, (label, variable) in enumerate(ts_rows, start=2):
+            self.entry_row(grid, i, label, variable)
         grid.columnconfigure(1, weight=1)
 
         self.build_physical_channels_section(main)
         self.build_service_names_section(main)
         self.build_cat_section(main, bg)
+
+        tot_frame = ttk.LabelFrame(main, text=self.t("TOT"))
+        tot_frame.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
+        tot_grid = ttk.Frame(tot_frame)
+        tot_grid.pack(fill="x", padx=8, pady=8)
+        tk.Checkbutton(
+            tot_grid,
+            text=self.t("Inject TOT"),
+            variable=self.tot_enabled,
+            onvalue="on",
+            offvalue="off",
+            bg=bg,
+            activebackground=bg,
+            highlightthickness=0,
+            bd=0,
+        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
+        self.combo_row(tot_grid, 1, "Time Source", self.tot_time_source, ["manual", "system"])
+        self.entry_row(tot_grid, 2, "Manual Time", self.tot_start_time)
 
     def build_cat_section(self, parent, bg):
         frame = ttk.LabelFrame(parent, text=self.t("CAT / Access Control"))
@@ -1516,84 +1571,6 @@ class MakeTSGui(tk.Tk):
             entry.grid(row=row, column=col + 1, sticky="w", padx=(0, 18), pady=4)
             self.bind_input_context_menu(entry)
 
-    def build_program_tab(self):
-        main = self.make_scroll_frame(self.program_tab)
-        bg = self.cget("background")
-
-        eit_frame = ttk.LabelFrame(main, text=self.t("EIT Present Event"))
-        eit_frame.pack(fill="x", anchor="n", pady=(0, 8))
-        grid = ttk.Frame(eit_frame)
-        grid.pack(fill="x", padx=8, pady=8)
-
-        tk.Checkbutton(
-            grid,
-            text=self.t("Inject EIT"),
-            variable=self.eit_enabled,
-            onvalue="on",
-            offvalue="off",
-            bg=bg,
-            activebackground=bg,
-            highlightthickness=0,
-            bd=0,
-        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
-
-        self.entry_row(grid, 1, "Event ID", self.event_id)
-        self.entry_row(grid, 2, "Event Name", self.event_name)
-        self.description_text = self.text_row(grid, 3, "Description", self.event_text.get(), height=4)
-        self.entry_row(grid, 4, "Start Time", self.event_start_time)
-        self.entry_row(grid, 5, "Duration", self.event_duration)
-        self.combo_row(grid, 6, "Language", self.event_language, LANGUAGE_OPTIONS)
-        self.combo_row(grid, 7, "Running Status", self.event_running_status, ["running", "not-running", "pausing", "undefined"])
-        self.combo_row(grid, 8, "Genre", self.genre, GENRE_OPTIONS)
-        grid.columnconfigure(1, weight=1)
-
-        self.build_oneseg_eit_section(main, bg)
-
-        tot_frame = ttk.LabelFrame(main, text=self.t("TOT"))
-        tot_frame.pack(fill="x", anchor="n")
-        tot_grid = ttk.Frame(tot_frame)
-        tot_grid.pack(fill="x", padx=8, pady=8)
-
-        tk.Checkbutton(
-            tot_grid,
-            text=self.t("Inject TOT"),
-            variable=self.tot_enabled,
-            onvalue="on",
-            offvalue="off",
-            bg=bg,
-            activebackground=bg,
-            highlightthickness=0,
-            bd=0,
-        ).grid(row=0, column=1, sticky="w", pady=(0, 8))
-
-        self.combo_row(tot_grid, 1, "Time Source", self.tot_time_source, ["manual", "system"])
-        self.entry_row(tot_grid, 2, "Manual Time", self.tot_start_time)
-
-    def build_oneseg_eit_section(self, parent, bg):
-        frame = ttk.LabelFrame(parent, text=self.t("OneSeg") + " EIT")
-        frame.pack(fill="x", anchor="n", pady=(0, 8))
-        self.oneseg_eit_controls = []
-        self.oneseg_description_texts = {}
-
-        for index in (1, 2):
-            vars_ = self.oneseg_vars[index]
-            self.build_oneseg_eit_frame(
-                frame,
-                self.t(f"OneSeg {index}"),
-                index,
-                vars_["eit_mode"],
-                vars_["event_id"],
-                vars_["event_name"],
-                vars_["event_text"],
-                vars_["start_time"],
-                vars_["duration"],
-                vars_["language"],
-                vars_["running_status"],
-                vars_["genre"],
-                bg,
-            )
-        self.update_oneseg_eit_state()
-
     def build_oneseg_eit_frame(
         self,
         parent,
@@ -1611,7 +1588,7 @@ class MakeTSGui(tk.Tk):
         bg,
     ):
         group = ttk.LabelFrame(parent, text=title)
-        group.pack(fill="x", anchor="n", padx=8, pady=(8, 4))
+        group.pack(fill="x", anchor="n", padx=(0, 8), pady=(0, 8))
 
         grid = ttk.Frame(group)
         grid.pack(fill="x", padx=8, pady=8)
@@ -1664,13 +1641,114 @@ class MakeTSGui(tk.Tk):
         ))
 
     def build_log_tab(self):
-        self.log = ScrolledText(self.log_tab, height=15, wrap="none", bg="white", fg="black", insertbackground="black")
+        self.log = ScrolledText(
+            self.log_tab,
+            height=15,
+            wrap="none",
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            insertbackground="#d4d4d4",
+            font=("Consolas", 9),
+        )
         self.log.pack(fill="both", expand=True)
         self.bind_input_context_menu(self.log)
 
         buttons = ttk.Frame(self.log_tab)
         buttons.pack(fill="x", pady=(6, 0))
         ttk.Button(buttons, text=self.t("Clear"), width=10, command=self.clear_log).pack(side="left")
+
+    # ------------------------------------------------------------------ settings dialog
+
+    def open_settings(self):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("Settings"))
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        frame = ttk.Frame(dlg, padding=8)
+        frame.pack(fill="both", expand=True)
+
+        self.path_row(frame, "ffmpeg", self.ffmpeg_path, self.select_ffmpeg)
+        self.path_row(frame, "tsp.exe", self.tsduck_path, self.select_tsduck)
+
+        ttk.Separator(frame).pack(fill="x", pady=(8, 0))
+
+        util_row = ttk.Frame(frame)
+        util_row.pack(fill="x", padx=8, pady=(8, 0))
+        ttk.Button(util_row, text=self.t("Copy environment info"), command=self.copy_environment_info).pack(side="left")
+        ttk.Button(
+            util_row,
+            text=self.t("Check for updates"),
+            command=self.check_for_updates,
+            state="normal" if GITHUB_REPO else "disabled",
+        ).pack(side="left", padx=(6, 0))
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill="x", padx=8, pady=(8, 8))
+        ttk.Label(btn_row, text=f"v{APP_VERSION}", foreground="#888888").pack(side="left")
+        ttk.Button(btn_row, text=self.t("Close"), width=10, command=dlg.destroy).pack(side="right")
+
+    def copy_environment_info(self):
+        lines = [f"MakeTS v{APP_VERSION}"]
+        lines.append(f"Python {sys.version.split()[0]}")
+        lines.append(f"OS: {platform.platform()}")
+
+        ffmpeg = self.ffmpeg_path.get().strip() or "ffmpeg"
+        try:
+            r = subprocess.run(
+                [ffmpeg, "-version"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            lines.append("ffmpeg: " + (r.stdout.splitlines()[0] if r.stdout else "not found"))
+        except Exception:
+            lines.append("ffmpeg: not found")
+
+        tsp = self.tsduck_path.get().strip() or "tsp"
+        try:
+            r = subprocess.run(
+                [tsp, "--version"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            out = (r.stdout or r.stderr or "").splitlines()
+            lines.append("tsp: " + (out[0] if out else "not found"))
+        except Exception:
+            lines.append("tsp: not found")
+
+        try:
+            from importlib.metadata import version as pkg_version
+            lines.append(f"sv-ttk: {pkg_version('sv-ttk')}")
+        except Exception:
+            lines.append("sv-ttk: not installed")
+
+        text = "\n".join(lines)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo(self.t("Copy environment info"), self.t("Copied to clipboard.") + f"\n\n{text}")
+
+    def check_for_updates(self):
+        def fetch():
+            try:
+                url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+                req = urllib.request.Request(url, headers={"User-Agent": "MakeTS"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                latest = data.get("tag_name", "").lstrip("v")
+                current = APP_VERSION.lstrip("v")
+                if latest == current:
+                    msg = f"v{current} — {self.t('Up to date.')}"
+                elif latest:
+                    msg = f"{self.t('New version available:')} v{latest}\n{self.t('Current:')} v{current}"
+                else:
+                    msg = self.t("Could not determine latest version.")
+                self.after(0, lambda: messagebox.showinfo(self.t("Check for updates"), msg))
+            except urllib.error.URLError as e:
+                self.after(0, lambda: messagebox.showerror(self.t("Check for updates"), str(e)))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror(self.t("Check for updates"), str(e)))
+
+        threading.Thread(target=fetch, daemon=True).start()
 
     # ------------------------------------------------------------------ file dialogs
 
@@ -2034,11 +2112,7 @@ class MakeTSGui(tk.Tk):
             self.oneseg_vars[index][var_name].set(path)
 
     def select_output_file(self):
-        path = filedialog.asksaveasfilename(
-            title=self.t("Save as"),
-            defaultextension=".ts",
-            filetypes=[(self.t("MPEG2-TS files"), "*.ts"), (self.t("All files"), "*.*")],
-        )
+        path = filedialog.askdirectory(title=self.t("Select output folder"))
         if path:
             self.output_path.set(path)
 
@@ -3456,11 +3530,9 @@ class MakeTSGui(tk.Tk):
             messagebox.showwarning(self.t("No input"), self.t("Add files first."))
             return
 
-        output_path = self.output_path.get().strip()
-        if output_path:
-            output_dir = os.path.dirname(os.path.abspath(output_path))
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
+        output_dir = self.output_path.get().strip()
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
         self.start_button.config(state="disabled")
         self.stop_button.config(state="normal")
@@ -3474,10 +3546,9 @@ class MakeTSGui(tk.Tk):
     def encode_worker(self):
         try:
             input_files = list(self.input_files)
-            total_files = len(input_files)
 
-            for file_index, input_path in enumerate(input_files, start=1):
-                if not self.encode_one_file(input_path, file_index, total_files):
+            for input_path in input_files:
+                if not self.encode_one_file(input_path):
                     break
             self.log_queue.put("\n=== Encode finished ===\n")
         except FileNotFoundError:
@@ -3488,35 +3559,21 @@ class MakeTSGui(tk.Tk):
             self.log_queue.put("__ENCODE_DONE__")
 
     def output_folder_for_input(self, input_path):
-        save_path = self.output_path.get().strip()
-        if save_path:
-            folder = os.path.dirname(os.path.abspath(save_path))
-            if folder:
-                return folder
+        folder = self.output_path.get().strip()
+        if folder:
+            return os.path.abspath(folder)
         return os.path.dirname(os.path.abspath(input_path)) or os.getcwd()
 
-    def output_filename_for_input(self, input_path, file_index=1, total_files=1):
-        save_path = self.output_path.get().strip()
-        if save_path:
-            name = os.path.basename(save_path)
-            stem, ext = os.path.splitext(name)
-            if not stem:
-                stem = os.path.splitext(os.path.basename(input_path))[0] + "_mpeg2ts"
-            if not ext:
-                ext = ".ts"
-            if total_files > 1:
-                return f"{stem}_{file_index}{ext}"
-            return stem + ext
-
+    def output_filename_for_input(self, input_path):
         base = os.path.splitext(os.path.basename(input_path))[0]
         return base + "_mpeg2ts.ts"
 
-    def encode_one_file(self, input_path, file_index=1, total_files=1):
+    def encode_one_file(self, input_path):
         base = os.path.splitext(os.path.basename(input_path))[0]
         output_dir = self.output_folder_for_input(input_path)
         os.makedirs(output_dir, exist_ok=True)
 
-        output_name = self.output_filename_for_input(input_path, file_index, total_files)
+        output_name = self.output_filename_for_input(input_path)
         final_output = os.path.join(output_dir, output_name)
 
         final_stem, final_ext = os.path.splitext(output_name)

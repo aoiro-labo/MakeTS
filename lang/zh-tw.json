@@ -134,6 +134,10 @@
     "Audio files": "音訊檔案",
     "Video files": "影像檔案",
     "WAV files": "WAV 檔案",
-    "tsp.exe": "tsp.exe"
+    "tsp.exe": "tsp.exe",
+    "Main": "主頻道",
+    "Station": "廣播站",
+    "Settings": "設定",
+    "Close": "關閉"
   }
 }

@@ -134,6 +134,17 @@
     "MPEG2-TS files": "MPEG2-TSファイル",
     "Audio files": "音声ファイル",
     "Video files": "映像ファイル",
-    "WAV files": "WAVファイル"
+    "WAV files": "WAVファイル",
+    "Main": "メイン",
+    "Station": "放送局",
+    "Settings": "設定",
+    "Close": "閉じる",
+    "Copy environment info": "環境情報をコピー",
+    "Copied to clipboard.": "クリップボードにコピーしました。",
+    "Check for updates": "アップデートを確認",
+    "Up to date.": "最新バージョンです。",
+    "New version available:": "新しいバージョンがあります:",
+    "Current:": "現在:",
+    "Could not determine latest version.": "最新バージョンを取得できませんでした。"
   }
 }
