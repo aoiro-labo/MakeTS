@@ -20,7 +20,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "1.1.2"
 GITHUB_REPO = ""  # e.g. "owner/MakeTS" — set to enable update check
 
 LANGUAGE_OPTIONS = [
@@ -1675,7 +1675,7 @@ class MakeTSGui(tk.Tk):
 
         util_row = ttk.Frame(frame)
         util_row.pack(fill="x", padx=8, pady=(8, 0))
-        ttk.Button(util_row, text=self.t("Copy environment info"), command=self.copy_environment_info).pack(side="left")
+        ttk.Button(util_row, text=self.t("Copy environment info"), command=lambda: self.copy_environment_info(dlg)).pack(side="left")
         ttk.Button(
             util_row,
             text=self.t("Check for updates"),
@@ -1688,7 +1688,7 @@ class MakeTSGui(tk.Tk):
         ttk.Label(btn_row, text=f"v{APP_VERSION}", foreground="#888888").pack(side="left")
         ttk.Button(btn_row, text=self.t("Close"), width=10, command=dlg.destroy).pack(side="right")
 
-    def copy_environment_info(self):
+    def copy_environment_info(self, parent=None):
         lines = [f"MakeTS v{APP_VERSION}"]
         lines.append(f"Python {sys.version.split()[0]}")
         lines.append(f"OS: {platform.platform()}")
@@ -1725,7 +1725,7 @@ class MakeTSGui(tk.Tk):
         text = "\n".join(lines)
         self.clipboard_clear()
         self.clipboard_append(text)
-        messagebox.showinfo(self.t("Copy environment info"), self.t("Copied to clipboard.") + f"\n\n{text}")
+        messagebox.showinfo(self.t("Copy environment info"), self.t("Copied to clipboard.") + f"\n\n{text}", parent=parent or self)
 
     def check_for_updates(self):
         def fetch():
@@ -2539,11 +2539,16 @@ class MakeTSGui(tk.Tk):
 
         mode = self.video_rate_mode(video_info)
         if mode == "fixed_60p":
-            parts.extend(["fps=60000/1001", f"setsar={self.sar()}", "format=yuv420p"])
+            # setpts regenerates PTS from frame count so gaps/dupes from fps
+            # don't produce irregular timestamps in the output TS.
+            parts.extend(["fps=60000/1001", f"setsar={self.sar()}", "format=yuv420p",
+                          "setpts=N*1001/60000/TB"])
         elif mode == "telecine_24p_to_60i":
-            parts.extend(["fps=24000/1001", "telecine=pattern=23", "setfield=tff", f"setsar={self.sar()}", "format=yuv420p"])
+            parts.extend(["fps=24000/1001", "telecine=pattern=23", "setfield=tff", f"setsar={self.sar()}", "format=yuv420p",
+                          "setpts=N*1001/30000/TB"])
         else:
-            parts.extend(["fps=60000/1001", "tinterlace=interleave_top", "setfield=tff", f"setsar={self.sar()}", "format=yuv420p"])
+            parts.extend(["fps=60000/1001", "tinterlace=interleave_top", "setfield=tff", f"setsar={self.sar()}", "format=yuv420p",
+                          "setpts=N*1001/30000/TB"])
 
         parts.append(self.setparams_filter(dst))
         return ",".join(parts)
@@ -2975,6 +2980,7 @@ class MakeTSGui(tk.Tk):
         else:
             cmd.extend(["-r:v:0", "60000/1001"])
 
+
         video_stream_index = 1
         for service in oneseg_configs:
             if service.get("shares_oneseg1_video"):
@@ -3074,6 +3080,7 @@ class MakeTSGui(tk.Tk):
             "-color_primaries", dst["primaries_ff"],
             "-color_trc", dst["transfer_ff"],
             "-color_range", dst["range_ff"],
+            "-avoid_negative_ts", "make_zero",
             "-pcr_period", "20",
             "-mpegts_flags", "+resend_headers",
             "-muxrate", "8000k" if self.is_sd_output_size() else "16000k",
@@ -3083,11 +3090,15 @@ class MakeTSGui(tk.Tk):
         return cmd
 
     def audio_encode_args(self, index, bitrate, channels, language, title, sample_rate=None):
+        sr = (sample_rate or self.audio_samplerate.get()).strip() or "48000"
         return [
+            # asetpts=N/SR/TB recalculates PTS purely from sample count,
+            # eliminating any accumulated AAC/video PTS drift that causes
+            # Amatsukaze to misdetect audio discontinuities.
+            f"-af:a:{index}", f"aresample={sr},asetpts=N/SR/TB",
             f"-c:a:{index}", "aac",
             f"-b:a:{index}", bitrate,
             f"-ac:a:{index}", channels,
-            f"-ar:a:{index}", (sample_rate or self.audio_samplerate.get()).strip() or "48000",
             f"-metadata:s:a:{index}", f"language={self.audio_language_code(language)}",
             f"-metadata:s:a:{index}", f"title={title}",
         ]

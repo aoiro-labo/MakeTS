@@ -66,6 +66,22 @@ OneSeg 1 の設定が Video/Audio/Program の3タブに分散していたのを1
 - sv-ttk 未インストール時は `clam` テーマへ自動フォールバック
 - Log タブをダークターミナルスタイルに変更（`#1e1e1e` 背景、Consolas フォント）
 
+---
+
+### Amatsukaze互換性修正：音声PTSドリフト対策
+
+**対象ファイル:** `MakeTS.py`
+
+**問題:** MakeTS出力TSをAmatsukazeで再エンコードすると「音声歪みによるフレームスキップ」が大量発生（約46%のフレームが未出力になるケースあり）。
+
+**原因:** AACフレームサイズ（1024サンプル/48000Hz = 21.33ms）と映像フレーム間隔（30000/1001fps = 33.37ms）が割り切れないため、ffmpegがMPEG-TSに書く音声PTSに誤差が蓄積。Amatsukaze が微小なズレを「不連続」と判定してフレームスキップする。
+
+**修正内容:**
+- `audio_encode_args()`: `-ar` を `aresample={sr}:async=1:first_pts=0` フィルタに変更。音声PTSを映像タイムラインに追従させ、かつ先頭PTSを0に固定
+- `ffmpeg_command()`: `-avoid_negative_ts make_zero` を追加し、全ストリームの先頭PTSを0に統一
+
+---
+
 **run.bat の事前セットアップ:**
 初回のみ `pip install -r requirements.txt` を実行して sv-ttk を導入すること。
 
